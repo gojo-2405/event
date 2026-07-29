@@ -1,0 +1,31 @@
+{
+  "name": "@eventrax/api-gateway",
+  "private": true,
+  "version": "0.1.0",
+  "main": "dist/main.js",
+  "types": "dist/main.d.ts",
+  "scripts": {
+    "prebuild": "pnpm --filter @eventrax/config build && pnpm --filter @eventrax/contracts build && pnpm --filter @eventrax/logger build && pnpm --filter @eventrax/observability build",
+    "predev": "pnpm --filter @eventrax/config build && pnpm --filter @eventrax/contracts build && pnpm --filter @eventrax/logger build && pnpm --filter @eventrax/observability build",
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/main.ts",
+    "lint": "echo \"lint not configured yet\"",
+    "test": "echo \"test not configured yet\"",
+    "pretypecheck": "pnpm --filter @eventrax/config build && pnpm --filter @eventrax/contracts build && pnpm --filter @eventrax/logger build && pnpm --filter @eventrax/observability build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@eventrax/config": "workspace:*",
+    "@eventrax/contracts": "workspace:*",
+    "@eventrax/logger": "workspace:*",
+    "@eventrax/observability": "workspace:*",
+    "@fastify/cors": "^10.0.1",
+    "@fastify/helmet": "^13.0.0",
+    "@fastify/sensible": "^6.0.2",
+    "fastify": "^5.0.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2"
+  }
+}
