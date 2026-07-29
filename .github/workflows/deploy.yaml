@@ -2,11 +2,11 @@ name: Deploy Services
 
 
 # Environment mapping
-#   branch development → env "dev"    cluster "etx-dev"     service "dev-<svc>"
-#   branch qa          → env "qa"     cluster "etx-qa"      service "qa-<svc>"
-#   branch master      → env "master" cluster "etx-master"  service "master-<svc>"
+#   branch development → env "dev"    cluster "dev"     service "dev-<svc>"
+#   branch qa          → env "qa"     cluster "qa"       service "qa-<svc>"
+#   branch master      → env "master" cluster "master"   service "master-<svc>"
 #
-# Region: London (eu-west-2)
+# Region: Stockholm (eu-north-1)
 # ───────────────────────────────────────────────────────────────────────────
 
 on:
@@ -47,7 +47,7 @@ permissions:
   id-token: write # required to request the OIDC token for AWS role assumption
 
 env:
-  AWS_REGION: eu-north-1 # London
+  AWS_REGION: eu-north-1
   ECR_PREFIX: etx # ECR repositories are named "<ECR_PREFIX>-<service>"
 
 jobs:
@@ -119,12 +119,12 @@ jobs:
 
           echo "environment=${ENVIRONMENT}" >> "$GITHUB_OUTPUT"
           echo "prefix=${PREFIX}"            >> "$GITHUB_OUTPUT"
-          echo "cluster=${PREFIX}"       >> "$GITHUB_OUTPUT"
+          echo "cluster=${PREFIX}"           >> "$GITHUB_OUTPUT"
           echo "services=${SERVICES}"        >> "$GITHUB_OUTPUT"
 
           echo "Environment: ${ENVIRONMENT}"
           echo "Prefix:      ${PREFIX}"
-          echo "Cluster:     etx-${PREFIX}"
+          echo "Cluster:     ${PREFIX}"
           echo "Services:    ${SERVICES}"
 
   deploy:
@@ -151,24 +151,12 @@ jobs:
           IMAGE_TAG="${ENVIRONMENT}-${{ github.run_number }}"
 
           echo "ecr_repository=${{ env.ECR_PREFIX }}-${SERVICE}" >> "$GITHUB_OUTPUT"
-          echo "ecs_cluster=${PREFIX}"                       >> "$GITHUB_OUTPUT"
-          echo "ecs_service=${PREFIX}-${SERVICE}"                >> "$GITHUB_OUTPUT"
-          echo "container_name=${PREFIX}-${SERVICE}"             >> "$GITHUB_OUTPUT"
-          echo "image_tag=${IMAGE_TAG}"                          >> "$GITHUB_OUTPUT"
+          echo "ecs_cluster=${PREFIX}"                            >> "$GITHUB_OUTPUT"
+          echo "ecs_service=${PREFIX}-${SERVICE}"                 >> "$GITHUB_OUTPUT"
+          echo "container_name=${PREFIX}-${SERVICE}"              >> "$GITHUB_OUTPUT"
+          echo "image_tag=${IMAGE_TAG}"                           >> "$GITHUB_OUTPUT"
 
-      # 🐛 TEMPORARY — decode and print the OIDC token's claims so we can
-      #   compare the actual `sub`/`aud` GitHub sends against the AWS trust
-      #   policy. Remove this step once the AssumeRoleWithWebIdentity issue
-      #   is resolved — it's diagnostic only, safe to delete anytime.
-      - name: Debug OIDC token claims
-        run: |
-          set -uo pipefail   # no -e: base64's padding warning shouldn't kill this step
-          IDTOKEN=$(curl -sSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r .value)
-          echo "Decoded OIDC token claims:"
-          echo "$IDTOKEN" | cut -d. -f2 | base64 -d 2>/dev/null | jq . || true
-
-      # 🔐 AWS credentials via OIDC — full role ARN stored as a secret.
+      # 🔐 AWS credentials via OIDC — full role ARN stored as a secret (AWS_ROLE_ARN).
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -240,7 +228,7 @@ jobs:
             .registeredAt,
             .registeredBy,
             .enableFaultInjection
-          )' > cleaned-task-def.json 
+          )' > cleaned-task-def.json
 
       - name: Render Task Definition
         id: task-def
@@ -283,3 +271,65 @@ jobs:
           esac
 
           if [ -n "${TASK_DEF_ARN}" ]; then
+            TASK_DEF="${TASK_DEF_ARN##*/}"
+          else
+            TASK_DEF="n/a"
+          fi
+
+          BUILD_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+          PAYLOAD=$(jq -n \
+            --arg icon "${ICON}" \
+            --arg word "${WORD}" \
+            --arg service "${ECS_SERVICE}" \
+            --arg cluster "${ECS_CLUSTER}" \
+            --arg author "${GITHUB_ACTOR}" \
+            --arg branch "${GITHUB_REF_NAME}" \
+            --arg build "#${GITHUB_RUN_NUMBER}" \
+            --arg taskdef "${TASK_DEF}" \
+            --arg color "${COLOR}" \
+            --arg url "${BUILD_URL}" \
+            --arg btnstyle "${BTN_STYLE}" \
+            '{
+              text: ($word + ": Deploy " + $service + " to ECS  (" + $build + ")"),
+              attachments: [
+                {
+                  color: $color,
+                  fallback: ($word + ": Deploy " + $service + " to ECS  (" + $build + ")"),
+                  blocks: [
+                    {
+                      type: "section",
+                      text: { type: "mrkdwn", text: ($icon + "  *" + $word + ": Deploy " + $service + " to ECS*") }
+                    },
+                    {
+                      type: "section",
+                      text: {
+                        type: "mrkdwn",
+                        text: (
+                          ":bust_in_silhouette:  *Author Name:* " + $author + "\n" +
+                          ":herb:  *Branch name:* " + $branch + "\n" +
+                          ":bookmark:  *Build number:* " + $build + "\n" +
+                          ":clipboard:  *Task Definition number:* " + $taskdef
+                        )
+                      }
+                    },
+                    {
+                      type: "actions",
+                      elements: [
+                        (
+                          { type: "button", text: { type: "plain_text", text: "View Workflow", emoji: true }, url: $url }
+                          + (if $btnstyle != "" then { style: $btnstyle } else {} end)
+                        )
+                      ]
+                    },
+                    {
+                      type: "context",
+                      elements: [ { type: "mrkdwn", text: ("Cluster `" + $cluster + "`  •  Added by AOK CI/CD Bot") } ]
+                    }
+                  ]
+                }
+              ]
+            }')
+
+          curl -sSf -X POST -H 'Content-Type: application/json' \
+            --data "${PAYLOAD}" "${SLACK_WEBHOOK_URL}"
