@@ -39,9 +39,6 @@ on:
           - worker-service
 
 concurrency:
-  # Keep only the newest deploy run for a branch/environment alive. This avoids
-  # multiple pushes trying to replace ECS tasks at the same time and leaving the
-  # services stuck waiting for stability.
   group: deploy-services-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || github.ref_name }}
   cancel-in-progress: true
 
@@ -54,9 +51,6 @@ env:
   ECR_PREFIX: etx # ECR repositories are named "<ECR_PREFIX>-<service>"
 
 jobs:
-  # ─────────────────────────────────────────────────────────────────────────
-  # Resolve the target environment and the list of services to deploy.
-  # ─────────────────────────────────────────────────────────────────────────
   setup:
     runs-on: ubuntu-latest
     outputs:
@@ -67,7 +61,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2 # need the previous commit available to diff against
+          fetch-depth: 2
 
       - name: Resolve environment & services
         id: resolve
@@ -76,9 +70,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          # ---- Environment -----------------------------------------------------
-          # ENVIRONMENT is the label (GitHub env / dispatch): development|qa|master
-          # PREFIX is the short name used for AWS resources: dev|qa|master
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             ENVIRONMENT="${{ github.event.inputs.environment }}"
           else
@@ -95,11 +86,6 @@ jobs:
             *)           PREFIX="${ENVIRONMENT}" ;;
           esac
 
-          # ---- Services to deploy ---------------------------------------------
-          # Manual dispatch → deploy the chosen service, or all of them.
-          # Push          → only deploy services whose apps/<service>/ folder changed.
-          #                 A change under packages/ (shared code) or a first commit
-          #                 with no previous SHA to diff against deploys everything.
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             if [ "${{ github.event.inputs.service }}" != "all" ]; then
               SERVICES="[\"${{ github.event.inputs.service }}\"]"
@@ -141,9 +127,6 @@ jobs:
           echo "Cluster:     etx-${PREFIX}"
           echo "Services:    ${SERVICES}"
 
-  # ─────────────────────────────────────────────────────────────────────────
-  # Build → push to ECR → deploy to ECS, per selected service.
-  # ─────────────────────────────────────────────────────────────────────────
   deploy:
     needs: setup
     if: ${{ needs.setup.outputs.services != '[]' }}
@@ -151,22 +134,12 @@ jobs:
     environment: ${{ needs.setup.outputs.environment }}
     strategy:
       fail-fast: false
-      # ECS in these environments appears capacity-constrained; rolling every
-      # service at once can leave all of them waiting on replacement capacity
-      # and eventually timing out in the deploy action.
       max-parallel: 1
       matrix:
         service: ${{ fromJson(needs.setup.outputs.services) }}
     steps:
       - uses: actions/checkout@v4
 
-      # ⚙️ Per-service / per-env configuration
-      #   (PREFIX is dev|qa|master — "development" env uses the "dev" prefix)
-      #   ECR repository : <ECR_PREFIX>-<service>   e.g. etx-api-gateway
-      #   ECS cluster    : etx-<prefix>             e.g. etx-dev
-      #   ECS service    : <prefix>-<service>       e.g. dev-api-gateway
-      #   Container name : <prefix>-<service>       (must match the task def)
-      #   Image tag      : <build-number>           e.g. 1, 2, 3 … (+ "latest")
       - name: Configure deployment values
         id: config
         run: |
@@ -175,7 +148,6 @@ jobs:
           ENVIRONMENT="${{ needs.setup.outputs.environment }}"
           SERVICE="${{ matrix.service }}"
 
-          # Image tag = <environment>-<build number>, e.g. development-1, qa-5, master-3
           IMAGE_TAG="${ENVIRONMENT}-${{ github.run_number }}"
 
           echo "ecr_repository=${{ env.ECR_PREFIX }}-${SERVICE}" >> "$GITHUB_OUTPUT"
@@ -184,21 +156,29 @@ jobs:
           echo "container_name=${PREFIX}-${SERVICE}"             >> "$GITHUB_OUTPUT"
           echo "image_tag=${IMAGE_TAG}"                          >> "$GITHUB_OUTPUT"
 
-      # 🔐 AWS credentials via OIDC — no long-lived access keys needed.
-      #   Assumes a role named gh-deploy-<repo>-<environment>, created per the
-      #   trust policy scoped to repo:<org>/<repo>:environment:<environment>.
+      # 🐛 TEMPORARY — decode and print the OIDC token's claims so we can
+      #   compare the actual `sub`/`aud` GitHub sends against the AWS trust
+      #   policy. Remove this step once the AssumeRoleWithWebIdentity issue
+      #   is resolved — it's diagnostic only, safe to delete anytime.
+      - name: Debug OIDC token claims
+        run: |
+          set -euo pipefail
+          IDTOKEN=$(curl -sSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r .value)
+          echo "Decoded OIDC token claims:"
+          echo "$IDTOKEN" | cut -d. -f2 | base64 -d 2>/dev/null | jq .
+
+      # 🔐 AWS credentials via OIDC — full role ARN stored as a secret.
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # 🐳 Log in to Amazon ECR
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # 📦 Create the ECR repository if it does not already exist
       - name: Ensure ECR repository exists
         env:
           REPOSITORY: ${{ steps.config.outputs.ecr_repository }}
@@ -214,7 +194,6 @@ jobs:
             echo "Repository ${REPOSITORY} already exists."
           fi
 
-      # 🏗️ Build & push the image (repo root context, service-specific Dockerfile)
       - name: Build and push image
         id: build-image
         env:
@@ -235,7 +214,6 @@ jobs:
           docker push "${LATEST}"
           echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
 
-      # 📥 Fetch Task Definition (the live one the service is currently running)
       - name: Fetch Task Definition
         env:
           ECS_SERVICE: ${{ steps.config.outputs.ecs_service }}
@@ -251,7 +229,6 @@ jobs:
             --query taskDefinition \
             > task-definition.json
 
-      # 🧹 Clean JSON (strip read-only fields ECS rejects on re-register)
       - name: Clean Task Definition
         run: |
           cat task-definition.json | jq 'del(
@@ -265,7 +242,6 @@ jobs:
             .enableFaultInjection
           )' > cleaned-task-def.json 
 
-      # 🔄 Overwrite Image in Task Definition
       - name: Render Task Definition
         id: task-def
         uses: aws-actions/amazon-ecs-render-task-definition@v1
@@ -274,7 +250,6 @@ jobs:
           container-name: ${{ steps.config.outputs.container_name }}
           image: ${{ steps.build-image.outputs.image }}
 
-      # 🚀 Deploy
       - name: Deploy to ECS
         id: deploy
         uses: aws-actions/amazon-ecs-deploy-task-definition@v1
@@ -284,24 +259,17 @@ jobs:
           cluster: ${{ steps.config.outputs.ecs_cluster }}
           wait-for-service-stability: true
 
-      # 💬 Notify Slack — one message per service, on success / failure / aborted.
-      #   Needs an Incoming Webhook URL stored as the secret SLACK_WEBHOOK_URL.
-      #   Runs even when the job is cancelled (`always()`), so aborted deploys
-      #   (e.g. superseded by a newer push via cancel-in-progress) are reported.
       - name: Notify Slack
         if: ${{ always() }}
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          JOB_STATUS: ${{ job.status }} # success | failure | cancelled
+          JOB_STATUS: ${{ job.status }}
           ECS_SERVICE: ${{ steps.config.outputs.ecs_service }}
           ECS_CLUSTER: ${{ steps.config.outputs.ecs_cluster }}
-          # New task-definition revision that the deploy registered/rolled out,
-          # e.g. arn:aws:ecs:...:task-definition/dev-api-gateway:5 → dev-api-gateway:5
           TASK_DEF_ARN: ${{ steps.deploy.outputs.task-definition-arn }}
         run: |
           set -euo pipefail
 
-          # Skip quietly if the webhook secret isn't configured yet.
           if [ -z "${SLACK_WEBHOOK_URL}" ]; then
             echo "::notice::SLACK_WEBHOOK_URL not set — skipping Slack notification."
             exit 0
@@ -314,7 +282,6 @@ jobs:
             *)         ICON=":grey_question:";    WORD="${JOB_STATUS^^}"; COLOR="#808080"; BTN_STYLE="" ;;
           esac
 
-          # family:revision — strip everything up to the last "/" of the ARN.
           if [ -n "${TASK_DEF_ARN}" ]; then
             TASK_DEF="${TASK_DEF_ARN##*/}"
           else
