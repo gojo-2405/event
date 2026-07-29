@@ -1,0 +1,340 @@
+name: Deploy Services
+
+
+# Environment mapping
+#   branch development → env "dev"    cluster "etx-dev"     service "dev-<svc>"
+#   branch qa          → env "qa"     cluster "etx-qa"      service "qa-<svc>"
+#   branch master      → env "master" cluster "etx-master"  service "master-<svc>"
+#
+# Region: London (eu-west-2)
+# ───────────────────────────────────────────────────────────────────────────
+
+on:
+  push:
+    branches: [development, qa, master]
+    paths:
+      - "apps/**"
+      - "packages/**"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        type: choice
+        required: true
+        default: development
+        options: [development, qa, master]
+      service:
+        description: "Service to deploy"
+        type: choice
+        required: true
+        default: all
+        options:
+          - all
+          - api-gateway
+          - auth-service
+          - booking-service
+          - event-service
+          - worker-service
+
+concurrency:
+  # Keep only the newest deploy run for a branch/environment alive. This avoids
+  # multiple pushes trying to replace ECS tasks at the same time and leaving the
+  # services stuck waiting for stability.
+  group: deploy-services-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: eu-west-2 # London
+  ECR_PREFIX: etx # ECR repositories are named "<ECR_PREFIX>-<service>"
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────
+  # Resolve the target environment and the list of services to deploy.
+  # ─────────────────────────────────────────────────────────────────────────
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.resolve.outputs.environment }}
+      prefix: ${{ steps.resolve.outputs.prefix }}
+      cluster: ${{ steps.resolve.outputs.cluster }}
+      services: ${{ steps.resolve.outputs.services }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve environment & services
+        id: resolve
+        env:
+          ALL_SERVICES: '["api-gateway","auth-service","booking-service","event-service","worker-service"]'
+        run: |
+          set -euo pipefail
+
+          # ---- Environment -----------------------------------------------------
+          # ENVIRONMENT is the label (GitHub env / dispatch): development|qa|master
+          # PREFIX is the short name used for AWS resources: dev|qa|master
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            ENVIRONMENT="${{ github.event.inputs.environment }}"
+          else
+            case "${GITHUB_REF_NAME}" in
+              development) ENVIRONMENT="development" ;;
+              qa)          ENVIRONMENT="qa" ;;
+              master)      ENVIRONMENT="master" ;;
+              *) echo "::error::Unsupported branch ${GITHUB_REF_NAME}"; exit 1 ;;
+            esac
+          fi
+
+          case "${ENVIRONMENT}" in
+            development) PREFIX="dev" ;;
+            *)           PREFIX="${ENVIRONMENT}" ;;
+          esac
+
+          # ---- Services to deploy ---------------------------------------------
+          # Push → always deploy ALL services.
+          # Manual dispatch → deploy the chosen service, or all of them.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] \
+             && [ "${{ github.event.inputs.service }}" != "all" ]; then
+            SERVICES="[\"${{ github.event.inputs.service }}\"]"
+          else
+            SERVICES="${ALL_SERVICES}"
+          fi
+
+          echo "environment=${ENVIRONMENT}" >> "$GITHUB_OUTPUT"
+          echo "prefix=${PREFIX}"            >> "$GITHUB_OUTPUT"
+          echo "cluster=etx-${PREFIX}"       >> "$GITHUB_OUTPUT"
+          echo "services=${SERVICES}"        >> "$GITHUB_OUTPUT"
+
+          echo "Environment: ${ENVIRONMENT}"
+          echo "Prefix:      ${PREFIX}"
+          echo "Cluster:     etx-${PREFIX}"
+          echo "Services:    ${SERVICES}"
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Build → push to ECR → deploy to ECS, per selected service.
+  # ─────────────────────────────────────────────────────────────────────────
+  deploy:
+    needs: setup
+    if: ${{ needs.setup.outputs.services != '[]' }}
+    runs-on: ubuntu-latest
+    environment: ${{ needs.setup.outputs.environment }}
+    strategy:
+      fail-fast: false
+      # ECS in these environments appears capacity-constrained; rolling every
+      # service at once can leave all of them waiting on replacement capacity
+      # and eventually timing out in the deploy action.
+      max-parallel: 1
+      matrix:
+        service: ${{ fromJson(needs.setup.outputs.services) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # ⚙️ Per-service / per-env configuration
+      #   (PREFIX is dev|qa|master — "development" env uses the "dev" prefix)
+      #   ECR repository : <ECR_PREFIX>-<service>   e.g. etx-api-gateway
+      #   ECS cluster    : etx-<prefix>             e.g. etx-dev
+      #   ECS service    : <prefix>-<service>       e.g. dev-api-gateway
+      #   Container name : <prefix>-<service>       (must match the task def)
+      #   Image tag      : <build-number>           e.g. 1, 2, 3 … (+ "latest")
+      - name: Configure deployment values
+        id: config
+        run: |
+          set -euo pipefail
+          PREFIX="${{ needs.setup.outputs.prefix }}"
+          ENVIRONMENT="${{ needs.setup.outputs.environment }}"
+          SERVICE="${{ matrix.service }}"
+
+          # Image tag = <environment>-<build number>, e.g. development-1, qa-5, master-3
+          IMAGE_TAG="${ENVIRONMENT}-${{ github.run_number }}"
+
+          echo "ecr_repository=${{ env.ECR_PREFIX }}-${SERVICE}" >> "$GITHUB_OUTPUT"
+          echo "ecs_cluster=etx-${PREFIX}"                       >> "$GITHUB_OUTPUT"
+          echo "ecs_service=${PREFIX}-${SERVICE}"                >> "$GITHUB_OUTPUT"
+          echo "container_name=${PREFIX}-${SERVICE}"             >> "$GITHUB_OUTPUT"
+          echo "image_tag=${IMAGE_TAG}"                          >> "$GITHUB_OUTPUT"
+
+      # 🔐 AWS credentials (access key method — set as environment secrets)
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # 🐳 Log in to Amazon ECR
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # 📦 Create the ECR repository if it does not already exist
+      - name: Ensure ECR repository exists
+        env:
+          REPOSITORY: ${{ steps.config.outputs.ecr_repository }}
+        run: |
+          set -euo pipefail
+          if ! aws ecr describe-repositories --repository-names "${REPOSITORY}" >/dev/null 2>&1; then
+            echo "Repository ${REPOSITORY} not found — creating it."
+            aws ecr create-repository \
+              --repository-name "${REPOSITORY}" \
+              --image-scanning-configuration scanOnPush=true \
+              --image-tag-mutability MUTABLE
+          else
+            echo "Repository ${REPOSITORY} already exists."
+          fi
+
+      # 🏗️ Build & push the image (repo root context, service-specific Dockerfile)
+      - name: Build and push image
+        id: build-image
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          REPOSITORY: ${{ steps.config.outputs.ecr_repository }}
+          IMAGE_TAG: ${{ steps.config.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          IMAGE="${REGISTRY}/${REPOSITORY}:${IMAGE_TAG}"
+          LATEST="${REGISTRY}/${REPOSITORY}:latest"
+          docker build \
+            -f "apps/${{ matrix.service }}/Dockerfile" \
+            --build-arg SERVICE=${{ matrix.service }} \
+            -t "${IMAGE}" \
+            -t "${LATEST}" \
+            .
+          docker push "${IMAGE}"
+          docker push "${LATEST}"
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+
+      # 📥 Fetch Task Definition (the live one the service is currently running)
+      - name: Fetch Task Definition
+        env:
+          ECS_SERVICE: ${{ steps.config.outputs.ecs_service }}
+        run: |
+          TASK_DEF_ARN=$(aws ecs describe-services \
+            --cluster "${{ steps.config.outputs.ecs_cluster }}" \
+            --services "${ECS_SERVICE}" \
+            --query "services[0].taskDefinition" \
+            --output text)
+          echo "Current task definition: $TASK_DEF_ARN"
+          aws ecs describe-task-definition \
+            --task-definition "$TASK_DEF_ARN" \
+            --query taskDefinition \
+            > task-definition.json
+
+      # 🧹 Clean JSON (strip read-only fields ECS rejects on re-register)
+      - name: Clean Task Definition
+        run: |
+          cat task-definition.json | jq 'del(
+            .taskDefinitionArn,
+            .revision,
+            .status,
+            .requiresAttributes,
+            .compatibilities,
+            .registeredAt,
+            .registeredBy
+          )' > cleaned-task-def.json
+
+      # 🔄 Overwrite Image in Task Definition
+      - name: Render Task Definition
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: cleaned-task-def.json
+          container-name: ${{ steps.config.outputs.container_name }}
+          image: ${{ steps.build-image.outputs.image }}
+
+      # 🚀 Deploy
+      - name: Deploy to ECS
+        id: deploy
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          service: ${{ steps.config.outputs.ecs_service }}
+          cluster: ${{ steps.config.outputs.ecs_cluster }}
+          wait-for-service-stability: true
+
+      # 💬 Notify Slack — one message per service, on success / failure / aborted.
+      #   Needs an Incoming Webhook URL stored as the secret SLACK_WEBHOOK_URL.
+      #   Runs even when the job is cancelled (`always()`), so aborted deploys
+      #   (e.g. superseded by a newer push via cancel-in-progress) are reported.
+      - name: Notify Slack
+        if: ${{ always() }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          JOB_STATUS: ${{ job.status }} # success | failure | cancelled
+          ECS_SERVICE: ${{ steps.config.outputs.ecs_service }}
+          ECS_CLUSTER: ${{ steps.config.outputs.ecs_cluster }}
+          # New task-definition revision that the deploy registered/rolled out,
+          # e.g. arn:aws:ecs:...:task-definition/dev-api-gateway:5 → dev-api-gateway:5
+          TASK_DEF_ARN: ${{ steps.deploy.outputs.task-definition-arn }}
+        run: |
+          set -euo pipefail
+
+          # Skip quietly if the webhook secret isn't configured yet.
+          if [ -z "${SLACK_WEBHOOK_URL}" ]; then
+            echo "::notice::SLACK_WEBHOOK_URL not set — skipping Slack notification."
+            exit 0
+          fi
+
+          case "${JOB_STATUS}" in
+            success)   ICON=":white_check_mark:"; WORD="SUCCESS";  COLOR="#2eb67d"; BTN_STYLE="primary" ;;
+            failure)   ICON=":x:";                WORD="FAILURE";  COLOR="#e01e5a"; BTN_STYLE="danger" ;;
+            cancelled) ICON=":no_entry:";         WORD="ABORTED";  COLOR="#dbab09"; BTN_STYLE="" ;;
+            *)         ICON=":grey_question:";    WORD="${JOB_STATUS^^}"; COLOR="#808080"; BTN_STYLE="" ;;
+          esac
+
+          # family:revision — strip everything up to the last "/" of the ARN.
+          if [ -n "${TASK_DEF_ARN}" ]; then
+            TASK_DEF="${TASK_DEF_ARN##*/}"
+          else
+            TASK_DEF="n/a"
+          fi
+
+          BUILD_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+          PAYLOAD=$(jq -n \
+            --arg icon    "${ICON}" \
+            --arg word    "${WORD}" \
+            --arg service "${ECS_SERVICE}" \
+            --arg cluster "${ECS_CLUSTER}" \
+            --arg author  "${GITHUB_ACTOR}" \
+            --arg branch  "${GITHUB_REF_NAME}" \
+            --arg build   "#${GITHUB_RUN_NUMBER}" \
+            --arg taskdef "${TASK_DEF}" \
+            --arg color   "${COLOR}" \
+            --arg url     "${BUILD_URL}" \
+            --arg btnstyle "${BTN_STYLE}" \
+            '{
+              text: ($word + ": Deploy " + $service + " to ECS  (" + $build + ")"),
+              attachments: [
+                {
+                  color: $color,
+                  fallback: ($word + ": Deploy " + $service + " to ECS  (" + $build + ")"),
+                  blocks: [
+                    { type: "section",
+                      text: { type: "mrkdwn",
+                              text: ($icon + "  *" + $word + ": Deploy " + $service + " to ECS*") } },
+                    { type: "section",
+                      text: { type: "mrkdwn",
+                              text: (
+                                ":bust_in_silhouette:  *Author Name:* " + $author + "\n" +
+                                ":herb:  *Branch name:* " + $branch + "\n" +
+                                ":bookmark:  *Build number:* " + $build + "\n" +
+                                ":clipboard:  *Task Definition number:* " + $taskdef
+                              ) } },
+                    { type: "actions",
+                      elements: [
+                        ( { type: "button",
+                            text: { type: "plain_text", text: "View Workflow", emoji: true },
+                            url: $url }
+                          + (if $btnstyle != "" then { style: $btnstyle } else {} end) )
+                      ] },
+                    { type: "context",
+                      elements: [ { type: "mrkdwn", text: ("Cluster `" + $cluster + "`  •  Added by AOK CI/CD Bot") } ] }
+                  ]
+                }
+              ]
+            }')
+
+          curl -sSf -X POST -H 'Content-Type: application/json' \
+            --data "${PAYLOAD}" "${SLACK_WEBHOOK_URL}"
