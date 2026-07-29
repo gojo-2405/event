@@ -231,8 +231,9 @@ jobs:
             .requiresAttributes,
             .compatibilities,
             .registeredAt,
-            .registeredBy
-          )' > cleaned-task-def.json
+            .registeredBy,
+            .enableFaultInjection
+          )' > cleaned-task-def.json 
 
       # 🔄 Overwrite Image in Task Definition
       - name: Render Task Definition
