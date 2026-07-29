@@ -65,6 +65,8 @@ jobs:
       services: ${{ steps.resolve.outputs.services }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2 # need the previous commit available to diff against
 
       - name: Resolve environment & services
         id: resolve
@@ -93,13 +95,39 @@ jobs:
           esac
 
           # ---- Services to deploy ---------------------------------------------
-          # Push → always deploy ALL services.
           # Manual dispatch → deploy the chosen service, or all of them.
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] \
-             && [ "${{ github.event.inputs.service }}" != "all" ]; then
-            SERVICES="[\"${{ github.event.inputs.service }}\"]"
+          # Push          → only deploy services whose apps/<service>/ folder changed.
+          #                 A change under packages/ (shared code) or a first commit
+          #                 with no previous SHA to diff against deploys everything.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            if [ "${{ github.event.inputs.service }}" != "all" ]; then
+              SERVICES="[\"${{ github.event.inputs.service }}\"]"
+            else
+              SERVICES="${ALL_SERVICES}"
+            fi
           else
-            SERVICES="${ALL_SERVICES}"
+            BEFORE_SHA="${{ github.event.before }}"
+            if [ -z "${BEFORE_SHA}" ] || [ "${BEFORE_SHA}" = "0000000000000000000000000000000000000000" ]; then
+              echo "No previous commit to diff against — deploying all services."
+              SERVICES="${ALL_SERVICES}"
+            else
+              CHANGED_FILES=$(git diff --name-only "${BEFORE_SHA}" "${{ github.sha }}")
+              echo "Changed files:"
+              echo "${CHANGED_FILES}"
+
+              if echo "${CHANGED_FILES}" | grep -q '^packages/'; then
+                echo "Shared packages/ changed — deploying all services."
+                SERVICES="${ALL_SERVICES}"
+              else
+                CHANGED_SERVICES="[]"
+                for svc in api-gateway auth-service booking-service event-service worker-service; do
+                  if echo "${CHANGED_FILES}" | grep -q "^apps/${svc}/"; then
+                    CHANGED_SERVICES=$(echo "${CHANGED_SERVICES}" | jq -c --arg s "$svc" '. + [$s]')
+                  fi
+                done
+                SERVICES="${CHANGED_SERVICES}"
+              fi
+            fi
           fi
 
           echo "environment=${ENVIRONMENT}" >> "$GITHUB_OUTPUT"
