@@ -49,7 +49,7 @@ permissions:
   contents: read
 
 env:
-  AWS_REGION: eu-west-2 # London
+  AWS_REGION: eu-north-1 # London
   ECR_PREFIX: etx # ECR repositories are named "<ECR_PREFIX>-<service>"
 
 jobs:
@@ -104,7 +104,7 @@ jobs:
 
           echo "environment=${ENVIRONMENT}" >> "$GITHUB_OUTPUT"
           echo "prefix=${PREFIX}"            >> "$GITHUB_OUTPUT"
-          echo "cluster=etx-${PREFIX}"       >> "$GITHUB_OUTPUT"
+          echo "cluster=${PREFIX}"       >> "$GITHUB_OUTPUT"
           echo "services=${SERVICES}"        >> "$GITHUB_OUTPUT"
 
           echo "Environment: ${ENVIRONMENT}"
@@ -150,7 +150,7 @@ jobs:
           IMAGE_TAG="${ENVIRONMENT}-${{ github.run_number }}"
 
           echo "ecr_repository=${{ env.ECR_PREFIX }}-${SERVICE}" >> "$GITHUB_OUTPUT"
-          echo "ecs_cluster=etx-${PREFIX}"                       >> "$GITHUB_OUTPUT"
+          echo "ecs_cluster=${PREFIX}"                       >> "$GITHUB_OUTPUT"
           echo "ecs_service=${PREFIX}-${SERVICE}"                >> "$GITHUB_OUTPUT"
           echo "container_name=${PREFIX}-${SERVICE}"             >> "$GITHUB_OUTPUT"
           echo "image_tag=${IMAGE_TAG}"                          >> "$GITHUB_OUTPUT"
