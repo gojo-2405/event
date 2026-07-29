@@ -49,7 +49,7 @@ permissions:
   contents: read
 
 env:
-  AWS_REGION: eu-west-2 # London
+  AWS_REGION: eu-north-1 # London
   ECR_PREFIX: etx # ECR repositories are named "<ECR_PREFIX>-<service>"
 
 jobs:
