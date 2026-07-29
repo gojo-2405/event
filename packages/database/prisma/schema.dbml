@@ -1,0 +1,476 @@
+Project EventManagement {
+  database_type: "PostgreSQL"
+}
+
+Enum package_type {
+  standard
+  vip
+  premium
+  corporate
+  group
+}
+
+Enum visibility_role {
+  owner
+  editor
+  viewer
+}
+
+Enum booking_status {
+  pending
+  pending_approval
+  approved
+  rejected
+  waitlisted
+  confirmed
+  cancelled
+  attended
+  no_show
+}
+
+Enum user_role {
+  admin
+  manager
+  employee
+  guest_coordinator
+  viewer
+}
+
+Table tenant {
+  id uuid [pk]
+  name varchar
+  slug varchar
+  logo_url text
+  primary_color varchar
+  is_active boolean
+  deleted_at timestamptz
+  deleted_by uuid
+  created_at timestamptz
+  updated_at timestamptz
+}
+
+Table role {
+  id uuid [pk]
+  key varchar [unique]
+  label varchar
+  description varchar
+  is_active boolean
+  created_at timestamptz
+}
+
+Table screen {
+  id uuid [pk]
+  key varchar [unique]
+  title varchar
+  path varchar
+  icon varchar
+  section varchar
+  sort_order int
+  is_active boolean
+  created_at timestamptz
+}
+
+Table role_screen {
+  role_id uuid [ref: > role.id]
+  screen_id uuid [ref: > screen.id]
+  can_view boolean
+  can_create boolean
+  can_edit boolean
+  can_delete boolean
+  can_approve boolean
+
+  indexes {
+    (role_id, screen_id) [pk]
+  }
+}
+
+Table app_user {
+  id uuid [pk]
+  tenant_id uuid [ref: > tenant.id]
+  email varchar
+  first_name varchar
+  last_name varchar
+  role user_role
+  password_hash varchar
+  role_id uuid [ref: > role.id]
+  is_active boolean
+  sso_subject varchar
+  deleted_at timestamptz
+  created_at timestamptz
+  updated_at timestamptz
+}
+
+Table user_delegation {
+  id uuid [pk]
+  delegator_id uuid [ref: > app_user.id]
+  delegate_id uuid [ref: > app_user.id]
+  is_active boolean
+  created_at timestamptz
+}
+
+Table entitlement {
+  id uuid [pk]
+  tenant_id uuid [ref: > tenant.id]
+  user_id uuid [ref: > app_user.id]
+  event_type varchar
+  max_bookings int
+  max_spend numeric
+  period varchar
+  created_at timestamptz
+  updated_at timestamptz
+}
+
+Table entitlement_ledger {
+  id uuid [pk]
+  tenant_id uuid [ref: > tenant.id]
+  user_id uuid [ref: > app_user.id]
+  entitlement_id uuid [ref: > entitlement.id]
+  booking_id uuid [ref: > booking.id]
+  direction varchar
+  bookings_delta int
+  spend_delta numeric
+  reason text
+  created_at timestamptz
+}
+
+Table event_category {
+  id uuid [pk]
+  name varchar
+  description text
+  created_at timestamptz
+}
+
+Table venue {
+  id uuid [pk]
+  name varchar
+  address_line1 varchar
+  address_line2 varchar
+  city varchar
+  country varchar
+  postcode varchar
+  capacity int
+  created_at timestamptz
+  updated_at timestamptz
+}
+
+Table event {
+  id uuid [pk]
+  tenant_id uuid [ref: > tenant.id]
+  category_id uuid [ref: > event_category.id]
+  venue_id uuid [ref: > venue.id]
+  title varchar
+  description text
+  event_type varchar
+  status varchar
+  start_date timestamptz
+  end_date timestamptz
+  is_invitation_only boolean
+  is_multi_date boolean
+  supplier varchar
+  dress_code varchar
+  inclusions varchar
+  booking_deadline timestamptz
+  thumbnail_url varchar
+  source varchar
+  is_published boolean
+  published_at timestamptz
+  unpublished_at timestamptz
+  force_published boolean
+  underperformance_flag_override boolean
+  created_by uuid [ref: > app_user.id]
+  created_at timestamptz
+  updated_at timestamptz
+}
+
+Table requestor_group {
+  id uuid [pk]
+  tenant_id uuid [ref: > tenant.id]
+  name varchar
+  is_restricted boolean
+  created_at timestamptz
+}
+
+Table requestor_group_member {
+  id uuid [pk]
+  group_id uuid [ref: > requestor_group.id]
+  user_id uuid [ref: > app_user.id]
+  created_at timestamptz
+}
+
+Table inventory_item {
+  id uuid [pk]
+  event_id uuid [ref: > event.id]
+  package_type package_type
+  total_seats int
+  available_seats int
+  unit_price numeric
+  supplier varchar
+  usage_rules text
+  version int
+  created_at timestamptz
+  updated_at timestamptz
+}
+
+Table inventory_snapshot {
+  id uuid [pk]
+  inventory_item_id uuid [ref: > inventory_item.id]
+  event_id uuid [ref: > event.id]
+  snapshot_at timestamptz
+  total_seats int
+  available_seats int
+  waitlisted_count int
+  trigger varchar
+}
+
+Table event_visibility {
+  id uuid [pk]
+  event_id uuid [ref: > event.id]
+  user_id uuid [ref: > app_user.id]
+  role visibility_role
+  group_id uuid [ref: > requestor_group.id]
+  created_at timestamptz
+}
+
+Table booking {
+  id uuid [pk]
+  tenant_id uuid [ref: > tenant.id]
+  event_id uuid [ref: > event.id]
+  inventory_item_id uuid [ref: > inventory_item.id]
+  requester_id uuid [ref: > app_user.id]
+  booked_by_id uuid [ref: > app_user.id]
+  on_behalf_of_id uuid [ref: > app_user.id]
+  seats_requested int
+  purpose varchar
+  business_purpose text
+  status booking_status
+  waitlist_position int
+  total_cost numeric
+  unit_value_per_guest numeric
+  cancellation_reason_code varchar
+  cancellation_reason_text text
+  notes text
+  created_at timestamptz
+  updated_at timestamptz
+}
+
+Table approval_rule {
+  id uuid [pk]
+  tenant_id uuid [ref: > tenant.id]
+  event_type varchar
+  min_spend numeric
+  max_spend numeric
+  auto_approve boolean
+  approver_role varchar
+  created_at timestamptz
+  updated_at timestamptz
+}
+
+Table approval_request {
+  id uuid [pk]
+  booking_id uuid [ref: > booking.id]
+  rule_id uuid [ref: > approval_rule.id]
+  approver_id uuid [ref: > app_user.id]
+  status varchar
+  decision_at timestamptz
+  comments text
+  created_at timestamptz
+}
+
+Table guest {
+  id uuid [pk]
+  tenant_id uuid [ref: > tenant.id]
+  first_name varchar
+  last_name varchar
+  email varchar
+  company varchar
+  phone varchar
+  dietary_requirements text
+  accessibility_needs text
+  deleted_at timestamptz
+  created_at timestamptz
+  updated_at timestamptz
+}
+
+Table invitation {
+  id uuid [pk]
+  booking_id uuid [ref: > booking.id]
+  guest_id uuid [ref: > guest.id]
+  status varchar
+  rsvp_at timestamptz
+  reconfirmed boolean
+  reconfirmed_at timestamptz
+  needs_reconfirmation boolean
+  token varchar
+  token_expires_at timestamptz
+  sent_at timestamptz
+  attended boolean
+  attended_at timestamptz
+  cancellation_reason_code varchar
+  cancellation_reason_text text
+  created_at timestamptz
+  updated_at timestamptz
+}
+
+Table invitation_audit {
+  id uuid [pk]
+  invitation_id uuid [ref: > invitation.id]
+  changed_by_id uuid [ref: > app_user.id]
+  field_changed varchar
+  old_value text
+  new_value text
+  changed_at timestamptz
+}
+
+Table enquiry {
+  id uuid [pk]
+  tenant_id uuid [ref: > tenant.id]
+  submitted_by_id uuid [ref: > app_user.id]
+  assigned_to_id uuid [ref: > app_user.id]
+  crm_ref varchar
+  crm_booking_ref int
+  crm_last_sync_at timestamptz
+  enquiry_type varchar
+  category varchar
+  purpose varchar
+  title varchar
+  preferred_date date
+  preferred_location varchar
+  budget numeric
+  currency varchar
+  tax_amount numeric
+  guest_count int
+  notes text
+  status varchar
+  attachment_urls text[]
+  created_at timestamptz
+  updated_at timestamptz
+  cancelled_at timestamptz
+}
+
+Table enquiry_proposal {
+  id uuid [pk]
+  enquiry_id uuid [ref: > enquiry.id]
+  venue_name varchar
+  proposed_price numeric
+  negotiated_price numeric
+  notes text
+  is_selected boolean
+  booking_id uuid [ref: > booking.id]
+  crm_offered_at timestamptz
+  created_at timestamptz
+}
+
+Table enquiry_dispatch {
+  id uuid [pk]
+  enquiry_id uuid [ref: > enquiry.id]
+  provider varchar
+  dispatch_key varchar [unique]
+  target_mode varchar
+  target_contact_ref int
+  crm_ref varchar
+  status varchar
+  attempt_count int
+  max_attempts int
+  next_attempt_at timestamptz
+  last_error text
+  payload json
+  response_payload json
+  processed_at timestamptz
+  created_at timestamptz
+  updated_at timestamptz
+
+  indexes {
+    (status, next_attempt_at)
+  }
+}
+
+Table crm_inbound_event {
+  id uuid [pk]
+  tenant_id uuid
+  flow varchar
+  external_ref varchar
+  idempotency_key varchar [unique]
+  signature_valid boolean
+  raw_payload json
+  status varchar
+  attempt_count int
+  max_attempts int
+  next_attempt_at timestamptz
+  last_error text
+  received_at timestamptz
+  processed_at timestamptz
+  created_at timestamptz
+  updated_at timestamptz
+
+  indexes {
+    (status, next_attempt_at)
+  }
+}
+
+Table retention_policy {
+  id uuid [pk]
+  tenant_id uuid
+  entity varchar
+  retain_days int
+  mode varchar
+  is_active boolean
+  created_at timestamptz
+  updated_at timestamptz
+}
+
+Table audit_log {
+  id uuid [pk]
+  tenant_id uuid
+  actor varchar
+  action varchar
+  entity_type varchar
+  entity_id varchar
+  metadata json
+  created_at timestamptz
+
+  indexes {
+    (tenant_id, entity_type, entity_id)
+  }
+}
+
+Table notification {
+  id uuid [pk]
+  tenant_id uuid [ref: > tenant.id]
+  user_id uuid [ref: > app_user.id]
+  type varchar
+  title varchar
+  message text
+  status varchar
+  metadata json
+  read_at timestamptz
+  created_at timestamptz
+  updated_at timestamptz
+
+  indexes {
+    (tenant_id, user_id, status)
+  }
+}
+
+Table notification_job {
+  id uuid [pk]
+  notification_id uuid [ref: > notification.id]
+  tenant_id uuid [ref: > tenant.id]
+  channel varchar
+  recipient_email varchar
+  template_key varchar
+  payload json
+  idempotency_key varchar [unique]
+  status varchar
+  attempt_count int
+  max_attempts int
+  next_attempt_at timestamptz
+  last_error text
+  sent_at timestamptz
+  created_at timestamptz
+  updated_at timestamptz
+
+  indexes {
+    (status, next_attempt_at)
+    (tenant_id, status)
+  }
+}

@@ -1,0 +1,701 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Tenant {
+  id             String        @id @db.Uuid
+  name           String?       @db.VarChar
+  slug           String?       @db.VarChar
+  logoUrl        String?       @map("logo_url")
+  primaryColor   String?       @map("primary_color") @db.VarChar
+  isActive       Boolean?      @map("is_active")
+  deletedAt      DateTime?     @map("deleted_at") @db.Timestamptz(6)
+  deletedBy      String?       @map("deleted_by") @db.Uuid
+  createdAt      DateTime?     @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime?     @map("updated_at") @db.Timestamptz(6)
+  users          AppUser[]
+  entitlements   Entitlement[]
+  ledgers        EntitlementLedger[]
+  events         Event[]
+  bookings       Booking[]
+  approvalRules  ApprovalRule[]
+  guests         Guest[]
+  enquiries      Enquiry[]
+  notifications  Notification[]
+  notificationJobs NotificationJob[]
+  requestorGroups RequestorGroup[]
+
+  @@map("tenant")
+}
+
+model AppUser {
+  id                   String              @id @db.Uuid
+  tenantId             String?             @map("tenant_id") @db.Uuid
+  email                String?             @db.VarChar
+  firstName            String?             @map("first_name") @db.VarChar
+  lastName             String?             @map("last_name") @db.VarChar
+  role                 UserRole?           @map("role")
+  passwordHash         String?             @map("password_hash") @db.VarChar
+  roleId               String?             @map("role_id") @db.Uuid
+  isActive             Boolean?            @map("is_active")
+  ssoSubject           String?             @map("sso_subject") @db.VarChar
+  deletedAt            DateTime?           @map("deleted_at") @db.Timestamptz(6)
+  createdAt            DateTime?           @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime?           @map("updated_at") @db.Timestamptz(6)
+  tenant               Tenant?             @relation(fields: [tenantId], references: [id])
+  roleRef              Role?               @relation(fields: [roleId], references: [id])
+  delegationsGiven     UserDelegation[]    @relation("delegator")
+  delegationsReceived  UserDelegation[]    @relation("delegate")
+  entitlements         Entitlement[]
+  entitlementLedgers   EntitlementLedger[]
+  createdEvents        Event[]
+  eventVisibilities    EventVisibility[]
+  bookingsRequested    Booking[]           @relation("requester")
+  bookingsBooked       Booking[]           @relation("bookedBy")
+  bookingsOnBehalf     Booking[]           @relation("onBehalfOf")
+  approvalRequests     ApprovalRequest[]
+  invitationAudits     InvitationAudit[]
+  enquiriesSubmitted   Enquiry[]           @relation("submittedBy")
+  enquiriesAssigned    Enquiry[]           @relation("assignedTo")
+  notifications        Notification[]
+  requestorGroupMemberships RequestorGroupMember[]
+
+  @@map("app_user")
+}
+
+model UserDelegation {
+  id          String    @id @db.Uuid
+  delegatorId String?   @map("delegator_id") @db.Uuid
+  delegateId  String?   @map("delegate_id") @db.Uuid
+  isActive    Boolean?  @map("is_active")
+  createdAt   DateTime? @map("created_at") @db.Timestamptz(6)
+  delegator   AppUser?  @relation("delegator", fields: [delegatorId], references: [id])
+  delegate    AppUser?  @relation("delegate", fields: [delegateId], references: [id])
+
+  @@map("user_delegation")
+}
+
+model Entitlement {
+  id          String              @id @db.Uuid
+  tenantId    String?             @map("tenant_id") @db.Uuid
+  userId      String?             @map("user_id") @db.Uuid
+  eventType   String?             @map("event_type") @db.VarChar
+  maxBookings Int?                @map("max_bookings")
+  maxSpend    Decimal?            @map("max_spend") @db.Decimal
+  period      String?             @db.VarChar
+  createdAt   DateTime?           @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime?           @map("updated_at") @db.Timestamptz(6)
+  tenant      Tenant?             @relation(fields: [tenantId], references: [id])
+  user        AppUser?            @relation(fields: [userId], references: [id])
+  ledger      EntitlementLedger[]
+
+  @@map("entitlement")
+}
+
+model EntitlementLedger {
+  id            String       @id @db.Uuid
+  tenantId      String?      @map("tenant_id") @db.Uuid
+  userId        String?      @map("user_id") @db.Uuid
+  entitlementId String?      @map("entitlement_id") @db.Uuid
+  bookingId     String?      @map("booking_id") @db.Uuid
+  direction     String?      @db.VarChar
+  bookingsDelta Int?         @map("bookings_delta")
+  spendDelta    Decimal?     @map("spend_delta") @db.Decimal
+  reason        String?
+  createdAt     DateTime?    @map("created_at") @db.Timestamptz(6)
+  tenant        Tenant?      @relation(fields: [tenantId], references: [id])
+  user          AppUser?     @relation(fields: [userId], references: [id])
+  entitlement   Entitlement? @relation(fields: [entitlementId], references: [id])
+  booking       Booking?     @relation(fields: [bookingId], references: [id])
+
+  @@map("entitlement_ledger")
+}
+
+model EventCategory {
+  id          String    @id @db.Uuid
+  name        String?   @db.VarChar
+  description String?
+  createdAt   DateTime? @map("created_at") @db.Timestamptz(6)
+  events      Event[]
+
+  @@map("event_category")
+}
+
+model Venue {
+  id           String    @id @db.Uuid
+  name         String?   @db.VarChar
+  addressLine1 String?   @map("address_line1") @db.VarChar
+  addressLine2 String?   @map("address_line2") @db.VarChar
+  city         String?   @db.VarChar
+  country      String?   @db.VarChar
+  postcode     String?   @db.VarChar
+  capacity     Int?
+  createdAt    DateTime? @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime? @map("updated_at") @db.Timestamptz(6)
+  events       Event[]
+
+  @@map("venue")
+}
+
+model Event {
+  id               String              @id @db.Uuid
+  tenantId         String?             @map("tenant_id") @db.Uuid
+  categoryId       String?             @map("category_id") @db.Uuid
+  venueId          String?             @map("venue_id") @db.Uuid
+  title            String?             @db.VarChar
+  description      String?
+  eventType        String?             @map("event_type") @db.VarChar
+  status           String?             @db.VarChar
+  startDate        DateTime?           @map("start_date") @db.Timestamptz(6)
+  endDate          DateTime?           @map("end_date") @db.Timestamptz(6)
+  isInvitationOnly Boolean?            @map("is_invitation_only")
+  isMultiDate      Boolean?            @map("is_multi_date")
+  supplier         String?             @db.VarChar
+  // S2-02 Listing CRUD (event-listing-crud-foundation.sql): fields the eventrax-2.0 Create
+  // Event wizard collects that had no home on this model before.
+  dressCode        String?             @map("dress_code") @db.VarChar
+  inclusions       String?             @db.VarChar
+  bookingDeadline  DateTime?           @map("booking_deadline") @db.Timestamptz(6)
+  thumbnailUrl     String?             @map("thumbnail_url") @db.VarChar
+  // FRD JIRA Epic 1, Story 1.4 (event-source-tagging-foundation.sql): one of "aok-sourced",
+  // "enquiry-originated", "company-sourced" — auto-set on create, never editable (no PATCH
+  // field for it), never surfaced to Requester-facing screens.
+  source           String?             @db.VarChar
+  // FRD JIRA Epic 2 (requestor-groups-and-publishing-foundation.sql): a Listing is "published"
+  // once publishedAt is set, and stays published across visibility/group changes until
+  // explicitly unpublished (unpublishedAt set, publishedAt cleared) — Story 2.2 requires this
+  // round-trip to lose no data, so unpublish never deletes the EventVisibility rows it created.
+  // Explicit boolean mirror of the publish state: false until the listing is published, flipped
+  // true on publish and back to false on unpublish. publishedAt/unpublishedAt remain the
+  // timestamped record of when; this is the plain true/false flag consumers can read directly.
+  isPublished      Boolean             @default(false) @map("is_published")
+  // Listing draft (event-draft-foundation.sql): true when saved via the wizard's "Save draft"
+  // action. Draft rows are excluded from the standard GET /api/v1/events listing and only
+  // returned when explicitly requested (?draft=true) or fetched by id to resume editing.
+  isDraft          Boolean             @default(false) @map("is_draft")
+  // Full Create Event wizard form for a draft, so "Resume" restores wizard-only fields (agenda,
+  // group selection, media, etc.) the flat columns can't hold. Only set when isDraft is true.
+  draftPayload     Json?               @map("draft_payload")
+  publishedAt      DateTime?           @map("published_at") @db.Timestamptz(6)
+  unpublishedAt    DateTime?           @map("unpublished_at") @db.Timestamptz(6)
+  // Story 2.3: set true only when an AOK actor used the force-publish action, so the audit
+  // trail (and any future UI) can distinguish it from a standard company-side publish.
+  forcePublished   Boolean?            @map("force_published")
+  // Story 2.7: manual override to re-include an otherwise VIP/Restricted-excluded Listing in
+  // underperformance flagging (Story 2.4/2.6 — not built yet; column exists so 2.7's override
+  // has somewhere to live once flagging is).
+  underperformanceFlagOverride Boolean? @map("underperformance_flag_override")
+  createdBy        String?             @map("created_by") @db.Uuid
+  createdAt        DateTime?           @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime?           @map("updated_at") @db.Timestamptz(6)
+  tenant           Tenant?             @relation(fields: [tenantId], references: [id])
+  category         EventCategory?      @relation(fields: [categoryId], references: [id])
+  venue            Venue?              @relation(fields: [venueId], references: [id])
+  creator          AppUser?            @relation(fields: [createdBy], references: [id])
+  inventoryItems   InventoryItem[]
+  snapshots        InventorySnapshot[]
+  visibilities     EventVisibility[]
+  bookings         Booking[]
+
+  @@map("event")
+}
+
+// FRD JIRA Epic 2, Story 2.1: "Publish a Listing to one or more Requestor Groups." No
+// group/audience concept existed anywhere in this schema before this — Requestor Groups are
+// named employee audiences a Listing is published to (distinct from AppUser.role, which is a
+// permission level, not an audience). `isRestricted` backs Story 2.7's VIP/Restricted exclusion
+// from underperformance flagging.
+model RequestorGroup {
+  id           String                   @id @db.Uuid
+  tenantId     String?                  @map("tenant_id") @db.Uuid
+  name         String                   @db.VarChar
+  isRestricted Boolean?                 @map("is_restricted")
+  createdAt    DateTime?                @map("created_at") @db.Timestamptz(6)
+  tenant       Tenant?                  @relation(fields: [tenantId], references: [id])
+  members      RequestorGroupMember[]
+  visibilities EventVisibility[]
+
+  @@map("requestor_group")
+}
+
+model RequestorGroupMember {
+  id        String          @id @db.Uuid
+  groupId   String?         @map("group_id") @db.Uuid
+  userId    String?         @map("user_id") @db.Uuid
+  createdAt DateTime?       @map("created_at") @db.Timestamptz(6)
+  group     RequestorGroup? @relation(fields: [groupId], references: [id])
+  user      AppUser?        @relation(fields: [userId], references: [id])
+
+  @@map("requestor_group_member")
+}
+
+model InventoryItem {
+  id             String              @id @db.Uuid
+  eventId        String?             @map("event_id") @db.Uuid
+  packageType    PackageType?        @map("package_type")
+  totalSeats     Int?                @map("total_seats")
+  availableSeats Int?                @map("available_seats")
+  unitPrice      Decimal?            @map("unit_price") @db.Decimal
+  supplier       String?             @db.VarChar
+  usageRules     String?             @map("usage_rules")
+  version        Int?
+  createdAt      DateTime?           @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime?           @map("updated_at") @db.Timestamptz(6)
+  event          Event?              @relation(fields: [eventId], references: [id])
+  snapshots      InventorySnapshot[]
+  bookings       Booking[]
+
+  @@map("inventory_item")
+}
+
+enum PackageType {
+  standard
+  vip
+  premium
+  corporate
+  group
+
+  @@map("package_type")
+}
+
+model InventorySnapshot {
+  id               String    @id @db.Uuid
+  inventoryItemId  String?   @map("inventory_item_id") @db.Uuid
+  eventId          String?   @map("event_id") @db.Uuid
+  snapshotAt       DateTime? @map("snapshot_at") @db.Timestamptz(6)
+  totalSeats       Int?      @map("total_seats")
+  availableSeats   Int?      @map("available_seats")
+  waitlistedCount  Int?      @map("waitlisted_count")
+  trigger          String?   @db.VarChar
+  inventoryItem    InventoryItem? @relation(fields: [inventoryItemId], references: [id])
+  event            Event?    @relation(fields: [eventId], references: [id])
+
+  @@map("inventory_snapshot")
+}
+
+model EventVisibility {
+  id        String    @id @db.Uuid
+  eventId    String?   @map("event_id") @db.Uuid
+  userId     String?   @map("user_id") @db.Uuid
+  role       VisibilityRole? @map("role")
+  // FRD JIRA Epic 2, Story 2.1: a visibility row now targets a RequestorGroup (the FRD's real
+  // publish-time targeting unit), not just an individual user. userId/role are the pre-existing
+  // per-user mechanism and are left untouched; groupId is additive.
+  groupId    String?   @map("group_id") @db.Uuid
+  createdAt  DateTime? @map("created_at") @db.Timestamptz(6)
+  event      Event?    @relation(fields: [eventId], references: [id])
+  user       AppUser?  @relation(fields: [userId], references: [id])
+  group      RequestorGroup? @relation(fields: [groupId], references: [id])
+
+  @@map("event_visibility")
+}
+
+enum VisibilityRole {
+  owner
+  editor
+  viewer
+
+  @@map("visibility_role")
+}
+
+model Booking {
+  id                     String               @id @db.Uuid
+  tenantId               String?              @map("tenant_id") @db.Uuid
+  eventId                String?              @map("event_id") @db.Uuid
+  inventoryItemId        String?              @map("inventory_item_id") @db.Uuid
+  requesterId            String?              @map("requester_id") @db.Uuid
+  bookedById             String?              @map("booked_by_id") @db.Uuid
+  onBehalfOfId           String?              @map("on_behalf_of_id") @db.Uuid
+  seatsRequested         Int?                 @map("seats_requested")
+  purpose                String?              @db.VarChar
+  businessPurpose        String?              @map("business_purpose")
+  status                 BookingStatus?       @map("status")
+  waitlistPosition       Int?                 @map("waitlist_position")
+  totalCost              Decimal?             @map("total_cost") @db.Decimal
+  unitValuePerGuest      Decimal?             @map("unit_value_per_guest") @db.Decimal
+  cancellationReasonCode String?              @map("cancellation_reason_code") @db.VarChar
+  cancellationReasonText String?              @map("cancellation_reason_text")
+  notes                  String?
+  createdAt              DateTime?            @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime?            @map("updated_at") @db.Timestamptz(6)
+  tenant                 Tenant?              @relation(fields: [tenantId], references: [id])
+  event                  Event?               @relation(fields: [eventId], references: [id])
+  inventoryItem          InventoryItem?       @relation(fields: [inventoryItemId], references: [id])
+  requester              AppUser?             @relation("requester", fields: [requesterId], references: [id])
+  bookedBy               AppUser?             @relation("bookedBy", fields: [bookedById], references: [id])
+  onBehalfOf             AppUser?             @relation("onBehalfOf", fields: [onBehalfOfId], references: [id])
+  entitlementLedgers     EntitlementLedger[]
+  approvalRequests       ApprovalRequest[]
+  invitations            Invitation[]
+  proposalLinks          EnquiryProposal[]
+
+  @@map("booking")
+}
+
+enum UserRole {
+  admin
+  manager
+  employee
+  guest_coordinator
+  viewer
+
+  @@map("user_role")
+}
+
+// RBAC: DB-driven roles, screens (nav + routes), and the role/screen access matrix.
+model Role {
+  id          String       @id @db.Uuid
+  key         String       @unique @db.VarChar
+  label       String       @db.VarChar
+  description String?      @db.VarChar
+  isActive    Boolean      @default(true) @map("is_active")
+  createdAt   DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  users       AppUser[]
+  screens     RoleScreen[]
+
+  @@map("role")
+}
+
+model Screen {
+  id        String       @id @db.Uuid
+  key       String       @unique @db.VarChar
+  title     String       @db.VarChar
+  path      String       @db.VarChar
+  icon      String?      @db.VarChar
+  section   String?      @db.VarChar
+  sortOrder Int          @default(0) @map("sort_order")
+  isActive  Boolean      @default(true) @map("is_active")
+  createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  roles     RoleScreen[]
+
+  @@map("screen")
+}
+
+model RoleScreen {
+  roleId     String  @map("role_id") @db.Uuid
+  screenId   String  @map("screen_id") @db.Uuid
+  canView    Boolean @default(true) @map("can_view")
+  canCreate  Boolean @default(false) @map("can_create")
+  canEdit    Boolean @default(false) @map("can_edit")
+  canDelete  Boolean @default(false) @map("can_delete")
+  canApprove Boolean @default(false) @map("can_approve")
+  role       Role    @relation(fields: [roleId], references: [id])
+  screen     Screen  @relation(fields: [screenId], references: [id])
+
+  @@id([roleId, screenId])
+  @@map("role_screen")
+}
+
+enum BookingStatus {
+  pending
+  pending_approval
+  approved
+  rejected
+  waitlisted
+  confirmed
+  cancelled
+  attended
+  no_show
+
+  @@map("booking_status")
+}
+
+model ApprovalRule {
+  id           String       @id @db.Uuid
+  tenantId     String?      @map("tenant_id") @db.Uuid
+  eventType    String?      @map("event_type") @db.VarChar
+  minSpend     Decimal?     @map("min_spend") @db.Decimal
+  maxSpend     Decimal?     @map("max_spend") @db.Decimal
+  autoApprove  Boolean?     @map("auto_approve")
+  approverRole String?      @map("approver_role") @db.VarChar
+  createdAt    DateTime?    @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime?    @map("updated_at") @db.Timestamptz(6)
+  tenant       Tenant?      @relation(fields: [tenantId], references: [id])
+  requests     ApprovalRequest[]
+
+  @@map("approval_rule")
+}
+
+model ApprovalRequest {
+  id         String      @id @db.Uuid
+  bookingId  String?     @map("booking_id") @db.Uuid
+  ruleId     String?     @map("rule_id") @db.Uuid
+  approverId String?     @map("approver_id") @db.Uuid
+  status     String?     @db.VarChar
+  decisionAt DateTime?   @map("decision_at") @db.Timestamptz(6)
+  comments   String?
+  createdAt  DateTime?   @map("created_at") @db.Timestamptz(6)
+  booking    Booking?    @relation(fields: [bookingId], references: [id])
+  rule       ApprovalRule? @relation(fields: [ruleId], references: [id])
+  approver   AppUser?    @relation(fields: [approverId], references: [id])
+
+  @@map("approval_request")
+}
+
+model Guest {
+  id                   String       @id @db.Uuid
+  tenantId             String?      @map("tenant_id") @db.Uuid
+  firstName            String?      @map("first_name") @db.VarChar
+  lastName             String?      @map("last_name") @db.VarChar
+  email                String?      @db.VarChar
+  company              String?      @db.VarChar
+  phone                String?      @db.VarChar
+  dietaryRequirements  String?      @map("dietary_requirements")
+  accessibilityNeeds   String?      @map("accessibility_needs")
+  deletedAt            DateTime?    @map("deleted_at") @db.Timestamptz(6)
+  createdAt            DateTime?    @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime?    @map("updated_at") @db.Timestamptz(6)
+  tenant               Tenant?      @relation(fields: [tenantId], references: [id])
+  invitations          Invitation[]
+
+  @@map("guest")
+}
+
+model Invitation {
+  id                     String            @id @db.Uuid
+  bookingId              String?           @map("booking_id") @db.Uuid
+  guestId                String?           @map("guest_id") @db.Uuid
+  status                 String?           @db.VarChar
+  rsvpAt                 DateTime?         @map("rsvp_at") @db.Timestamptz(6)
+  reconfirmed            Boolean?
+  reconfirmedAt          DateTime?         @map("reconfirmed_at") @db.Timestamptz(6)
+  // E20-55: set when a published listing's date/venue/time changes materially. There's no
+  // "GuestInvite" model in this schema (the ticket's term) — Invitation is the real
+  // equivalent, so this and the "pending_reconfirmation" status value (reusing the existing
+  // free-text status column) live here instead.
+  needsReconfirmation    Boolean?          @default(false) @map("needs_reconfirmation")
+  token                  String?           @db.VarChar
+  tokenExpiresAt         DateTime?         @map("token_expires_at") @db.Timestamptz(6)
+  sentAt                 DateTime?         @map("sent_at") @db.Timestamptz(6)
+  attended               Boolean?
+  attendedAt             DateTime?         @map("attended_at") @db.Timestamptz(6)
+  cancellationReasonCode String?           @map("cancellation_reason_code") @db.VarChar
+  cancellationReasonText String?           @map("cancellation_reason_text")
+  createdAt              DateTime?         @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime?         @map("updated_at") @db.Timestamptz(6)
+  booking                Booking?          @relation(fields: [bookingId], references: [id])
+  guest                  Guest?            @relation(fields: [guestId], references: [id])
+  audits                 InvitationAudit[]
+
+  @@map("invitation")
+}
+
+model InvitationAudit {
+  id           String     @id @db.Uuid
+  invitationId String?    @map("invitation_id") @db.Uuid
+  changedById  String?    @map("changed_by_id") @db.Uuid
+  fieldChanged String?    @map("field_changed") @db.VarChar
+  oldValue     String?    @map("old_value")
+  newValue     String?    @map("new_value")
+  changedAt    DateTime?  @map("changed_at") @db.Timestamptz(6)
+  invitation   Invitation? @relation(fields: [invitationId], references: [id])
+  changedBy    AppUser?   @relation(fields: [changedById], references: [id])
+
+  @@map("invitation_audit")
+}
+
+model Enquiry {
+  id                String            @id @db.Uuid
+  tenantId          String?           @map("tenant_id") @db.Uuid
+  submittedById     String?           @map("submitted_by_id") @db.Uuid
+  assignedToId      String?           @map("assigned_to_id") @db.Uuid
+  crmRef            String?           @map("crm_ref") @db.VarChar
+  // AOK's booking id, set once the enquiry's EnquiryWebhook reports action=BookingSpawned.
+  // Distinct from crmRef (AOK's *enquiry* id) — a booking is a separate AOK entity. Used by
+  // the E20-58 status-mirror poll to know which AOK booking to fetch status/offers for.
+  crmBookingRef     Int?              @map("crm_booking_ref")
+  // Last time this enquiry's client-facing status was synced from AOK's Booking data
+  // (E20-58). AOK does not webhook booking status changes, only the initial
+  // enquiry BookingSpawned/Ignored event — this is set by the periodic status-mirror poll.
+  crmLastSyncAt     DateTime?         @map("crm_last_sync_at") @db.Timestamptz(6)
+  enquiryType       String?           @map("enquiry_type") @db.VarChar
+  // "Category" from the AOK-style submission wizard (e.g. Corporate Hospitality, Tickets,
+  // Private Dining) — coarser-grained than enquiryType/title, asked as the wizard's first
+  // step. Kept as a separate free-text column rather than folded into enquiryType since the
+  // two are asked as distinct questions in the flow this mirrors.
+  category          String?           @db.VarChar
+  // "Purpose" — the wizard's second step (why the event is happening, e.g. "Client
+  // relationship building", "Internal team celebration"). Free text, not a fixed enum: AOK's
+  // own UI treats this as an open list that varies by category.
+  purpose           String?           @db.VarChar
+  title             String?           @db.VarChar
+  preferredDate     DateTime?         @map("preferred_date") @db.Date
+  preferredLocation String?           @map("preferred_location") @db.VarChar
+  budget            Decimal?          @db.Decimal
+  // ISO 4217 currency code for `budget`/`taxAmount` (e.g. "GBP", "USD"). Defaulted at the
+  // route layer, not here, so existing rows created before this field existed aren't
+  // silently reinterpreted.
+  currency          String?           @db.VarChar
+  taxAmount         Decimal?          @map("tax_amount") @db.Decimal
+  guestCount        Int?              @map("guest_count")
+  notes             String?
+  status            String?           @db.VarChar
+  attachmentUrls    String[]          @map("attachment_urls")
+  createdAt         DateTime?         @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime?         @map("updated_at") @db.Timestamptz(6)
+  // Set by the enquiry-level cancel endpoint (distinct from event-level cancellation in
+  // E20-55, which cancels a Listing's Booking, not a not-yet-booked Enquiry).
+  cancelledAt       DateTime?         @map("cancelled_at") @db.Timestamptz(6)
+  tenant            Tenant?           @relation(fields: [tenantId], references: [id])
+  submittedBy       AppUser?          @relation("submittedBy", fields: [submittedById], references: [id])
+  assignedTo        AppUser?          @relation("assignedTo", fields: [assignedToId], references: [id])
+  proposals         EnquiryProposal[]
+  dispatches        EnquiryDispatch[]
+
+  @@map("enquiry")
+}
+
+model EnquiryProposal {
+  id              String    @id @db.Uuid
+  enquiryId       String?   @map("enquiry_id") @db.Uuid
+  venueName       String?   @map("venue_name") @db.VarChar
+  proposedPrice   Decimal?  @map("proposed_price") @db.Decimal
+  negotiatedPrice Decimal?  @map("negotiated_price") @db.Decimal
+  notes           String?
+  isSelected      Boolean?  @map("is_selected")
+  bookingId       String?   @map("booking_id") @db.Uuid
+  // Dedupe key against AOK's BookingOffer entries when syncing from GET /bookings/{id} —
+  // AOK's BookingOffer has no stable id of its own (per their OpenAPI spec), only an
+  // "offered" timestamp, so (enquiryId, crmOfferedAt) is the best available natural key.
+  crmOfferedAt    DateTime? @map("crm_offered_at") @db.Timestamptz(6)
+  createdAt       DateTime? @map("created_at") @db.Timestamptz(6)
+  enquiry         Enquiry?  @relation(fields: [enquiryId], references: [id])
+  booking         Booking?  @relation(fields: [bookingId], references: [id])
+
+  @@map("enquiry_proposal")
+}
+
+model EnquiryDispatch {
+  id               String    @id @db.Uuid
+  enquiryId        String    @map("enquiry_id") @db.Uuid
+  provider         String    @db.VarChar
+  dispatchKey      String    @unique @map("dispatch_key") @db.VarChar
+  targetMode       String    @map("target_mode") @db.VarChar
+  targetContactRef Int?      @map("target_contact_ref")
+  crmRef           String?   @map("crm_ref") @db.VarChar
+  status           String    @db.VarChar
+  attemptCount     Int       @map("attempt_count")
+  maxAttempts      Int       @map("max_attempts")
+  nextAttemptAt    DateTime? @map("next_attempt_at") @db.Timestamptz(6)
+  lastError        String?   @map("last_error")
+  payload          Json?     @map("payload")
+  responsePayload  Json?     @map("response_payload")
+  processedAt      DateTime? @map("processed_at") @db.Timestamptz(6)
+  createdAt        DateTime? @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime? @map("updated_at") @db.Timestamptz(6)
+  enquiry          Enquiry   @relation(fields: [enquiryId], references: [id])
+
+  @@index([status, nextAttemptAt])
+  @@map("enquiry_dispatch")
+}
+
+model CrmInboundEvent {
+  id             String    @id @db.Uuid
+  tenantId       String?   @map("tenant_id") @db.Uuid
+  flow           String    @db.VarChar
+  externalRef    String?   @map("external_ref") @db.VarChar
+  idempotencyKey String    @unique @map("idempotency_key") @db.VarChar
+  signatureValid Boolean   @map("signature_valid")
+  rawPayload     Json      @map("raw_payload")
+  status         String    @db.VarChar
+  attemptCount   Int       @map("attempt_count")
+  maxAttempts    Int       @map("max_attempts")
+  nextAttemptAt  DateTime? @map("next_attempt_at") @db.Timestamptz(6)
+  lastError      String?   @map("last_error")
+  receivedAt     DateTime? @map("received_at") @db.Timestamptz(6)
+  processedAt    DateTime? @map("processed_at") @db.Timestamptz(6)
+  createdAt      DateTime? @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime? @map("updated_at") @db.Timestamptz(6)
+
+  @@index([status, nextAttemptAt])
+  @@map("crm_inbound_event")
+}
+
+// E20-59: GDPR Data Retention + Purge. No plain scalar tenantId (not @relation'd to Tenant),
+// same lightweight pattern as CrmInboundEvent above — avoids touching the heavily-referenced
+// Tenant model just for this.
+model RetentionPolicy {
+  id         String    @id @db.Uuid
+  tenantId   String?   @map("tenant_id") @db.Uuid
+  // Only "guest" has a real implementation today (see gdpr-retention.ts) — no
+  // "GuestInvite"/"ExternalGuest" models exist in this schema (the ticket's terms); Guest is
+  // the real PII holder. AppUser also holds PII but is deliberately out of scope: it's an
+  // internal system account, not guest data, and blanket-purging it is a different, riskier
+  // problem than this ticket describes.
+  entity     String    @db.VarChar
+  retainDays Int       @map("retain_days")
+  mode       String    @db.VarChar
+  isActive   Boolean   @default(true) @map("is_active")
+  createdAt  DateTime? @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime? @map("updated_at") @db.Timestamptz(6)
+
+  @@map("retention_policy")
+}
+
+// Generic audit sink E20-22 flagged as not yet existing (only the narrow InvitationAudit
+// table exists). Built here because E20-59 explicitly requires "every purge/erasure writes
+// AuditLog" and there's nowhere else for that to go. Immutable via trigger (see
+// gdpr-retention-foundation.sql), same pattern as invitation_audit.
+model AuditLog {
+  id         String    @id @db.Uuid
+  tenantId   String?   @map("tenant_id") @db.Uuid
+  actor      String    @db.VarChar
+  action     String    @db.VarChar
+  entityType String?   @map("entity_type") @db.VarChar
+  entityId   String?   @map("entity_id") @db.VarChar
+  metadata   Json?
+  createdAt  DateTime? @map("created_at") @db.Timestamptz(6)
+
+  @@index([tenantId, entityType, entityId])
+  @@map("audit_log")
+}
+
+model Notification {
+  id          String            @id @db.Uuid
+  tenantId    String?           @map("tenant_id") @db.Uuid
+  userId      String?           @map("user_id") @db.Uuid
+  type        String            @db.VarChar
+  title       String            @db.VarChar
+  message     String
+  status      String            @db.VarChar
+  metadata    Json?             @map("metadata")
+  readAt      DateTime?         @map("read_at") @db.Timestamptz(6)
+  createdAt   DateTime?         @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime?         @map("updated_at") @db.Timestamptz(6)
+  tenant      Tenant?           @relation(fields: [tenantId], references: [id])
+  user        AppUser?          @relation(fields: [userId], references: [id])
+  jobs        NotificationJob[]
+
+  @@index([tenantId, userId, status])
+  @@map("notification")
+}
+
+model NotificationJob {
+  id             String        @id @db.Uuid
+  notificationId String        @map("notification_id") @db.Uuid
+  tenantId       String?       @map("tenant_id") @db.Uuid
+  channel        String        @db.VarChar
+  recipientEmail String?       @map("recipient_email") @db.VarChar
+  templateKey    String?       @map("template_key") @db.VarChar
+  payload        Json?         @map("payload")
+  idempotencyKey String        @unique @map("idempotency_key") @db.VarChar
+  status         String        @db.VarChar
+  attemptCount   Int           @map("attempt_count")
+  maxAttempts    Int           @map("max_attempts")
+  nextAttemptAt  DateTime?     @map("next_attempt_at") @db.Timestamptz(6)
+  lastError      String?       @map("last_error")
+  sentAt         DateTime?     @map("sent_at") @db.Timestamptz(6)
+  createdAt      DateTime?     @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime?     @map("updated_at") @db.Timestamptz(6)
+  notification   Notification  @relation(fields: [notificationId], references: [id])
+  tenant         Tenant?       @relation(fields: [tenantId], references: [id])
+
+  @@index([status, nextAttemptAt])
+  @@index([tenantId, status])
+  @@map("notification_job")
+}
