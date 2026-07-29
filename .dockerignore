@@ -1,0 +1,21 @@
+# Build context excludes — keeps images small & forces a clean install/build
+**/node_modules
+**/dist
+**/coverage
+**/.turbo
+
+.git
+.github
+docs
+infra
+tests
+
+**/.DS_Store
+**/*.log
+**/.env
+**/.env.*
+!**/.env.example
+
+Dockerfile
+**/Dockerfile
+.dockerignore
