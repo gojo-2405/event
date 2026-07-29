@@ -1,0 +1,26 @@
+{
+  "name": "eventrax-services",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev --parallel",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "typecheck": "turbo run typecheck",
+    "clean": "turbo run clean",
+    "db:generate": "pnpm --filter @eventrax/database prisma:generate",
+    "db:format": "pnpm --filter @eventrax/database prisma:format"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "prisma": "^6.10.1",
+    "turbo": "^2.0.0",
+    "typescript": "^5.6.3"
+  }
+}
